@@ -124,15 +124,18 @@
   const KEY = 'qr-ctecka-v1';
   let items = load(), stream = null, raf = 0, lastVal = '', lastTime = 0, audio = null;
 
-  function load(){ try { return JSON.parse(localStorage.getItem(KEY)) || []; } catch { return []; } }
+  function load(){ try { return (JSON.parse(localStorage.getItem(KEY)) || []).map(x => ({ ...x, v: clean(x.v) })); } catch { return []; } }
   function save(){ try { localStorage.setItem(KEY, JSON.stringify(items)); } catch {} }
 
   const pad = n => String(n).padStart(2, '0');
   const fmt = ts => { const d = new Date(ts); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; };
   const isUrl = s => /^https?:\/\/\S+$/i.test(s.trim());
   // Formát štítku: 9 číslic IČ + sériové číslo (VELKÁ písmena/číslice) + název
+  // Štítky mají oddělovač „│“; čtečka ho někdy přečte jako nesmyslný znak (např. „笏“) → vrátíme ho zpět
+  const clean = s => s.replace(/^(\d{9})\s*[^A-Za-z0-9\s]{1,3}\s*/, '$1│').replace(/\s*[|┃¦]\s*/g, '│');
   const parse = s => {
-    const parts = s.split(/\s*[│|┃¦]\s*/);
+    s = clean(s);
+    const parts = s.split(/\s*│\s*/);
     if (parts.length >= 3) return { ic: parts[0].trim(), sn: parts[1].trim(), name: parts.slice(2).join(' ').trim() };
     const m = s.trim().match(/^(\d{9})\s*([A-Z0-9-]+?)(?=[A-Z]?[a-z]|\s|$)\s*(.*)$/);
     return m ? { ic: m[1], sn: m[2], name: m[3].trim() } : null;
@@ -176,6 +179,7 @@
   function toast(msg){ const t = $('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 2200); }
 
   function found(val){
+    val = clean(val);
     const now = Date.now();
     if (val === lastVal && now - lastTime < 3000) { lastTime = now; return; }   // stejný kód před kamerou – nespamuj
     lastVal = val; lastTime = now;
