@@ -46,6 +46,9 @@
   li .body{flex:1;min-width:0}
   li .val{word-break:break-all;font-size:15px}
   li .val a{color:var(--acc);text-decoration:none}
+  li .name{font-weight:600}
+  li .tags{display:flex;gap:6px;flex-wrap:wrap;margin-top:4px}
+  li .tags span{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;background:#0b0d10;border:1px solid var(--line);border-radius:6px;padding:2px 6px;color:var(--acc)}
   li .meta{color:var(--mute);font-size:12px;margin-top:3px}
   li .acts{display:flex;gap:4px}
   li .acts button{flex:none;padding:6px 9px;font-size:13px;border-radius:10px}
@@ -109,6 +112,11 @@
   const pad = n => String(n).padStart(2, '0');
   const fmt = ts => { const d = new Date(ts); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; };
   const isUrl = s => /^https?:\/\/\S+$/i.test(s.trim());
+  // Formát štítku: 9 číslic IČ + sériové číslo (VELKÁ písmena/číslice) + název
+  const parse = s => {
+    const m = s.trim().match(/^(\d{9})\s*([A-Z0-9-]+?)(?=[A-Z]?[a-z]|\s|$)\s*(.*)$/);
+    return m ? { ic: m[1], sn: m[2], name: m[3].trim() } : null;
+  };
   const esc = s => s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
   function render(){
@@ -119,8 +127,11 @@
     ['btnTxt','btnCsv','btnCopy','btnClear'].forEach(id => $(id).disabled = !items.length);
     items.slice().reverse().forEach(it => {
       const li = document.createElement('li');
-      const v = esc(it.v);
-      li.innerHTML = `<div class="body"><div class="val">${isUrl(it.v) ? `<a href="${v}" target="_blank" rel="noopener">${v}</a>` : v}</div>
+      const v = esc(it.v), p = parse(it.v);
+      const main = p
+        ? `<div class="name">${esc(p.name || '—')}</div><div class="tags"><span>IČ ${esc(p.ic)}</span><span>SN ${esc(p.sn)}</span></div>`
+        : (isUrl(it.v) ? `<a href="${v}" target="_blank" rel="noopener">${v}</a>` : v);
+      li.innerHTML = `<div class="body"><div class="val">${main}</div>
         <div class="meta">${fmt(it.t)}${it.n > 1 ? ` · ${it.n}×` : ''}</div></div>
         <div class="acts"><button data-a="copy">Kopír.</button><button data-a="del" class="danger">✕</button></div>`;
       li.querySelector('[data-a=copy]').onclick = () => copy(it.v);
@@ -237,8 +248,9 @@
   $('btnTxt').onclick = () => saveFile(`qr-${stamp()}.txt`, items.map(x => x.v).join('\n') + '\n', 'text/plain;charset=utf-8');
   $('btnCsv').onclick = () => {
     // středník + BOM → česká verze Excelu / Numbers to otevře správně i s diakritikou
-    const rows = [['#','Obsah','Datum a čas','Počet skenů']]
-      .concat(items.map((x, i) => [i + 1, x.v, fmt(x.t), x.n || 1]));
+    const rows = [['#','IČ','Sériové číslo','Název','Celý obsah','Datum a čas','Počet skenů']]
+      .concat(items.map((x, i) => { const p = parse(x.v) || { ic:'', sn:'', name:'' };
+        return [i + 1, p.ic, p.sn, p.name, x.v, fmt(x.t), x.n || 1]; }));
     const csv = '﻿' + rows.map(r => r.map(c => csvCell(String(c))).join(';')).join('\r\n') + '\r\n';
     saveFile(`qr-${stamp()}.csv`, csv, 'text/csv;charset=utf-8');
   };
