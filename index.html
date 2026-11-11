@@ -132,6 +132,8 @@
   const isUrl = s => /^https?:\/\/\S+$/i.test(s.trim());
   // Formát štítku: 9 číslic IČ + sériové číslo (VELKÁ písmena/číslice) + název
   const parse = s => {
+    const parts = s.split(/\s*[│|┃¦]\s*/);
+    if (parts.length >= 3) return { ic: parts[0].trim(), sn: parts[1].trim(), name: parts.slice(2).join(' ').trim() };
     const m = s.trim().match(/^(\d{9})\s*([A-Z0-9-]+?)(?=[A-Z]?[a-z]|\s|$)\s*(.*)$/);
     return m ? { ic: m[1], sn: m[2], name: m[3].trim() } : null;
   };
@@ -200,14 +202,71 @@
     return jsQR(img.data, img.width, img.height, { inversionAttempts: inv });
   }
 
+  // ---- Oprava uříznutých štítků ----
+  // Tiskárna štítků uřízne pravý okraj QR kódu → rohovému čtverci vpravo nahoře chybí pravá strana
+  // a běžné čtečky kód nenajdou. Najdeme blok QR kódu a chybějící sloupec dokreslíme.
+  const rc = document.createElement('canvas'), rx = rc.getContext('2d', { willReadFrequently: true });
+  const cc = document.createElement('canvas'), cx = cc.getContext('2d', { willReadFrequently: true });
+  function otsu(gray){
+    const hist = new Uint32Array(256); for (let i = 0; i < gray.length; i++) hist[gray[i]]++;
+    let sum = 0; for (let i = 0; i < 256; i++) sum += i * hist[i];
+    let sB = 0, wB = 0, best = 0, t = 128;
+    for (let i = 0; i < 256; i++){ wB += hist[i]; if (!wB) continue; const wF = gray.length - wB; if (!wF) break;
+      sB += i * hist[i]; const mB = sB / wB, mF = (sum - sB) / wF, v = wB * wF * (mB - mF) ** 2; if (v > best){ best = v; t = i; } }
+    return t;
+  }
+  function findBlobs(img){
+    const { width: W, height: H, data } = img, gray = new Uint8Array(W * H);
+    for (let i = 0, j = 0; i < gray.length; i++, j += 4) gray[i] = (data[j] * 77 + data[j+1] * 150 + data[j+2] * 29) >> 8;
+    const t = otsu(gray), K = 3, gw = Math.ceil(W / K), gh = Math.ceil(H / K), g = new Uint8Array(gw * gh);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (gray[y * W + x] < t) g[((y / K) | 0) * gw + ((x / K) | 0)] = 1;
+    const d = new Uint8Array(gw * gh);
+    for (let y = 1; y < gh - 1; y++) for (let x = 1; x < gw - 1; x++){ const i = y * gw + x;
+      if (g[i] | g[i-1] | g[i+1] | g[i-gw] | g[i+gw]) d[i] = 1; }
+    const seen = new Uint8Array(gw * gh), out = [], st = [];
+    for (let i = 0; i < d.length; i++){
+      if (!d[i] || seen[i]) continue;
+      let minx = 1e9, maxx = -1, miny = 1e9, maxy = -1, n = 0; st.push(i); seen[i] = 1;
+      while (st.length){ const k = st.pop(), x = k % gw, y = (k / gw) | 0; n++;
+        if (x < minx) minx = x; if (x > maxx) maxx = x; if (y < miny) miny = y; if (y > maxy) maxy = y;
+        for (const q of [k-1, k+1, k-gw, k+gw]) if (q >= 0 && q < d.length && d[q] && !seen[q]){ seen[q] = 1; st.push(q); } }
+      const bw = maxx - minx + 1, bh = maxy - miny + 1, ar = bw / bh;
+      if (bw >= 12 && bh >= 12 && ar > 0.6 && ar < 1.6 && n / (bw * bh) > 0.45) out.push({ x: minx * K, y: miny * K, w: bw * K, h: bh * K, n });
+    }
+    return out.sort((a, b) => b.n - a.n).slice(0, 2);
+  }
+  function repairDecode(source, sw, sh, rots = [0, 180, 90, 270]){
+    const s = Math.min(1, 900 / Math.max(sw, sh)), W = Math.round(sw * s), H = Math.round(sh * s);
+    for (const rot of rots){
+      const side = rot % 180 === 0;
+      rc.width = side ? W : H; rc.height = side ? H : W;
+      rx.save(); rx.translate(rc.width / 2, rc.height / 2); rx.rotate(rot * Math.PI / 180);
+      rx.drawImage(source, -W / 2, -H / 2, W, H); rx.restore();
+      const blobs = findBlobs(rx.getImageData(0, 0, rc.width, rc.height));
+      for (const b of blobs) for (const N of [29, 25, 33, 21]) for (const off of [0, -0.4, 0.5]){
+        const m = b.h / N, pad = Math.round(4 * m);
+        cc.width = b.w + pad * 2 + Math.round(2 * m); cc.height = b.h + pad * 2;
+        cx.fillStyle = '#fff'; cx.fillRect(0, 0, cc.width, cc.height);
+        cx.drawImage(rc, b.x, b.y, b.w, b.h, pad, pad, b.w, b.h);
+        cx.fillStyle = '#000'; cx.fillRect(pad + b.w + off * m, pad, 0.8 * m, 7 * m);
+        const img = cx.getImageData(0, 0, cc.width, cc.height);
+        const r = jsQR(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' });
+        if (r && r.data) return r;
+      }
+    }
+    return null;
+  }
+
   // Střídá: celý snímek (kód zblízka, přes celou kameru) ↔ výřez středu v plném rozlišení (kód z dálky)
   const passes = [[1, 800], [0.55, 1100], [1, 1200], [0.35, 900]];
   let pass = 0;
   function tick(){
     if (!stream) return;
     if (video.readyState >= 2 && video.videoWidth){
-      const [crop, max] = passes[pass++ % passes.length];
-      const r = decode(video, video.videoWidth, video.videoHeight, crop, max, 'dontInvert');
+      const i = pass++;
+      let r;
+      if (i % 4 === 3) r = repairDecode(video, video.videoWidth, video.videoHeight, [[0, 180, 90, 270][(i >> 2) % 4]]);
+      else { const [crop, max] = passes[i % passes.length]; r = decode(video, video.videoWidth, video.videoHeight, crop, max, 'dontInvert'); }
       if (r && r.data) found(r.data);
     }
     raf = setTimeout(tick, 40);
@@ -273,6 +332,7 @@
       const W = img.naturalWidth, H = img.naturalHeight;
       let r = null;
       for (const [c, m] of [[1, 1200], [1, 2000], [0.6, 1600], [0.35, 1400], [1, 700]]) { r = decode(img, W, H, c, m); if (r && r.data) break; }
+      if (!(r && r.data)) r = repairDecode(img, W, H);
       URL.revokeObjectURL(img.src);
       if (r && r.data) { lastVal = ''; found(r.data); } else toast('Na fotce jsem QR kód nenašel');
     };
