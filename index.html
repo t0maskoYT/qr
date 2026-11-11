@@ -251,7 +251,9 @@
     const rows = [['#','IČ','Sériové číslo','Název','Celý obsah','Datum a čas','Počet skenů']]
       .concat(items.map((x, i) => { const p = parse(x.v) || { ic:'', sn:'', name:'' };
         return [i + 1, p.ic, p.sn, p.name, x.v, fmt(x.t), x.n || 1]; }));
-    const csv = '﻿' + rows.map(r => r.map(c => csvCell(String(c))).join(';')).join('\r\n') + '\r\n';
+    // IČ a SN jako text (="…"), aby Excel neuřízl nuly na začátku
+    const asText = v => /^[0-9A-Za-z-]+$/.test(v) ? `="${v}"` : csvCell(v);
+    const csv = '\uFEFF' + rows.map((r, ri) => r.map((c, ci) => ri && (ci === 1 || ci === 2) && c !== '' ? asText(String(c)) : csvCell(String(c))).join(';')).join('\r\n') + '\r\n';
     saveFile(`qr-${stamp()}.csv`, csv, 'text/csv;charset=utf-8');
   };
 
